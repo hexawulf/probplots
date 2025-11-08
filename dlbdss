@@ -1,0 +1,2 @@
+#!/bin/bash
+exec /home/zk/projects/probplots/bin/dlbdss "$@"

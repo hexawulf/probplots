@@ -1,0 +1,211 @@
+#!/usr/bin/env -S /home/zk/projects/probplots/.venv/bin/python
+# DLBDSS01-01 Stats Helper CLI (v0.2, Pi-ready)
+# Author: 0xWulf
+# Desc: Course-aligned probability & stats utilities + headless plotting
+
+import argparse, sys, math
+import numpy as np
+from scipy import stats
+import matplotlib
+import matplotlib.pyplot as plt
+
+# Use headless backend by default when DISPLAY is absent
+if not matplotlib.get_backend().lower().startswith("agg") and ("DISPLAY" not in __import__("os").environ):
+    matplotlib.use("Agg", force=True)
+
+# ---------- helpers ----------
+def _float(x): return float(x)
+def _int(x): return int(x)
+
+def print_val(v):
+    if isinstance(v, (list, tuple, np.ndarray)):
+        for x in np.atleast_1d(v): print(x)
+    else:
+        print(v)
+
+def maybe_show_or_save(fig, out):
+    if out:
+        fig.savefig(out, dpi=140, bbox_inches="tight")
+    else:
+        plt.show()
+
+# ---------- PROBABILITY BASICS ----------
+def cmd_factorial(a): print_val(math.factorial(a.n))
+def cmd_perm(a): print_val(math.perm(a.n, a.k))
+def cmd_comb(a): print_val(math.comb(a.n, a.k))
+
+# ---------- DISTRIBUTIONS ----------
+# Binomial
+def cmd_binom_pmf(a): print_val(stats.binom.pmf(a.k, a.n, a.p))
+def cmd_binom_cdf(a):
+    if a.kmin is not None and a.kmax is not None:
+        lo = stats.binom.cdf(a.kmax, a.n, a.p)
+        hi = stats.binom.cdf(a.kmin-1, a.n, a.p)
+        print_val(lo - hi)
+    else:
+        print_val(stats.binom.cdf(a.k, a.n, a.p))
+
+# Poisson
+def cmd_pois_pmf(a): print_val(stats.poisson.pmf(a.k, a.lam))
+def cmd_pois_cdf(a): print_val(stats.poisson.cdf(a.k, a.lam))
+
+# Geometric: k = #failures before first success (support 0,1,2,...)
+def cmd_geom_pmf(a): print_val(stats.geom(p=a.p, loc=-1).pmf(a.k))
+def cmd_geom_cdf(a): print_val(stats.geom(p=a.p, loc=-1).cdf(a.k))
+
+# Normal
+def cmd_norm_pdf(a): print_val(stats.norm.pdf(a.x, a.mu, a.sigma))
+def cmd_norm_cdf(a):
+    if a.lower is not None and a.upper is not None:
+        lo = stats.norm.cdf(a.lower, a.mu, a.sigma)
+        hi = stats.norm.cdf(a.upper, a.mu, a.sigma)
+        print_val(hi - lo)
+    else:
+        print_val(stats.norm.cdf(a.x, a.mu, a.sigma))
+def cmd_norm_inv(a): print_val(stats.norm.ppf(a.p, a.mu, a.sigma))
+
+# Exponential
+def cmd_exp_pdf(a): print_val(stats.expon(scale=1/a.lam).pdf(a.x))
+def cmd_exp_cdf(a): print_val(stats.expon(scale=1/a.lam).cdf(a.x))
+
+# Uniform
+def cmd_unif_pdf(a): print_val(stats.uniform(loc=a.a, scale=a.b-a.a).pdf(a.x))
+def cmd_unif_cdf(a): print_val(stats.uniform(loc=a.a, scale=a.b-a.a).cdf(a.x))
+
+# ---------- INEQUALITIES & CLT ----------
+def cmd_markov(a): print_val(a.mean/a.t)
+def cmd_chebyshev(a): print_val((a.sigma**2)/(a.t**2))
+def cmd_clt(a):
+    if a.lower is None or a.upper is None:
+        print("Require --lower and --upper.", file=sys.stderr); sys.exit(2)
+    se = a.sigma/np.sqrt(a.n)
+    lo = stats.norm.cdf(a.lower, a.mu, se)
+    hi = stats.norm.cdf(a.upper, a.mu, se)
+    print_val(hi - lo)
+
+# ---------- PLOTTING & SIM ----------
+def style_axes(ax, title):
+    ax.set_title(title); ax.grid(True, alpha=0.3)
+
+def cmd_plot_pdf(a):
+    fig, ax = plt.subplots()
+    if a.dist == "normal":
+        xs = np.linspace(a.mu-4*a.sigma, a.mu+4*a.sigma, 600)
+        ax.plot(xs, stats.norm.pdf(xs, a.mu, a.sigma), lw=2)
+        style_axes(ax, f"Normal PDF μ={a.mu}, σ={a.sigma}")
+    elif a.dist == "exponential":
+        xs = np.linspace(0, max(10/a.lam, 5), 600)
+        ax.plot(xs, stats.expon(scale=1/a.lam).pdf(xs), lw=2)
+        style_axes(ax, f"Exponential PDF λ={a.lam}")
+    elif a.dist == "uniform":
+        xs = np.linspace(a.a-1, a.b+1, 600)
+        ax.plot(xs, stats.uniform(loc=a.a, scale=a.b-a.a).pdf(xs), lw=2)
+        style_axes(ax, f"Uniform PDF [{a.a},{a.b}]")
+    else:
+        print("Unsupported dist.", file=sys.stderr); sys.exit(2)
+    maybe_show_or_save(fig, a.out)
+
+def cmd_sim_hist(a):
+    rng = np.random.default_rng(a.seed)
+    dtype = np.float32 if a.dtype == "float32" else np.float64
+
+    fig, ax = plt.subplots()
+    if a.dist == "normal":
+        data = rng.normal(a.mu, a.sigma, size=a.n).astype(dtype, copy=False)
+        ax.hist(data, bins=a.bins, density=True, alpha=0.6)
+        xs = np.linspace(a.mu-4*a.sigma, a.mu+4*a.sigma, 600)
+        ax.plot(xs, stats.norm.pdf(xs, a.mu, a.sigma), lw=2)
+        style_axes(ax, f"Sim Normal n={a.n} (μ={a.mu}, σ={a.sigma})")
+    elif a.dist == "binom":
+        data = rng.binomial(a.N, a.p, size=a.n)
+        ax.hist(data, bins=min(a.bins, a.N+1), density=True, alpha=0.6)
+        ks = np.arange(0, a.N+1)
+        ax.plot(ks, stats.binom.pmf(ks, a.N, a.p), lw=2)
+        style_axes(ax, f"Sim Binomial n={a.n} (N={a.N}, p={a.p})")
+    elif a.dist == "poisson":
+        data = rng.poisson(a.lam, size=a.n)
+        ax.hist(data, bins=a.bins, density=True, alpha=0.6)
+        ks = np.arange(0, max(int(a.lam*4)+1, 15))
+        ax.plot(ks, stats.poisson.pmf(ks, a.lam), lw=2)
+        style_axes(ax, f"Sim Poisson n={a.n} (λ={a.lam})")
+    else:
+        print("Unsupported dist.", file=sys.stderr); sys.exit(2)
+    maybe_show_or_save(fig, a.out)
+
+# ---------- ARGPARSE ----------
+def main():
+    p = argparse.ArgumentParser(prog="dlbdss", description="DLBDSS01-01 Stats Helper CLI")
+    sp = p.add_subparsers(dest="cmd", required=True)
+
+    # basics
+    q = sp.add_parser("factorial"); q.add_argument("n", type=_int); q.set_defaults(func=cmd_factorial)
+    q = sp.add_parser("perm"); q.add_argument("n", type=_int); q.add_argument("k", type=_int); q.set_defaults(func=cmd_perm)
+    q = sp.add_parser("comb"); q.add_argument("n", type=_int); q.add_argument("k", type=_int); q.set_defaults(func=cmd_comb)
+
+    # binomial
+    q = sp.add_parser("binom-pmf")
+    q.add_argument("--n", type=_int, required=True); q.add_argument("--p", type=_float, required=True); q.add_argument("--k", type=_int, required=True)
+    q.set_defaults(func=cmd_binom_pmf)
+
+    q = sp.add_parser("binom-cdf")
+    q.add_argument("--n", type=_int, required=True); q.add_argument("--p", type=_float, required=True)
+    g = q.add_mutually_exclusive_group(required=True)
+    g.add_argument("--k", type=_int)
+    g.add_argument("--kmin", type=_int)
+    q.add_argument("--kmax", type=_int)
+    q.set_defaults(func=cmd_binom_cdf)
+
+    # poisson
+    q = sp.add_parser("pois-pmf"); q.add_argument("--lam", type=_float, required=True); q.add_argument("--k", type=_int, required=True); q.set_defaults(func=cmd_pois_pmf)
+    q = sp.add_parser("pois-cdf"); q.add_argument("--lam", type=_float, required=True); q.add_argument("--k", type=_int, required=True); q.set_defaults(func=cmd_pois_cdf)
+
+    # geometric
+    q = sp.add_parser("geom-pmf"); q.add_argument("--p", type=_float, required=True); q.add_argument("--k", type=_int, required=True); q.set_defaults(func=cmd_geom_pmf)
+    q = sp.add_parser("geom-cdf"); q.add_argument("--p", type=_float, required=True); q.add_argument("--k", type=_int, required=True); q.set_defaults(func=cmd_geom_cdf)
+
+    # normal
+    q = sp.add_parser("norm-pdf"); q.add_argument("--x", type=_float, required=True); q.add_argument("--mu", type=_float, default=0.0); q.add_argument("--sigma", type=_float, default=1.0); q.set_defaults(func=cmd_norm_pdf)
+    q = sp.add_parser("norm-cdf"); q.add_argument("--mu", type=_float, default=0.0); q.add_argument("--sigma", type=_float, default=1.0)
+    g = q.add_mutually_exclusive_group(required=True)
+    g.add_argument("--x", type=_float)
+    g.add_argument("--lower", type=_float)
+    q.add_argument("--upper", type=_float)
+    q.set_defaults(func=cmd_norm_cdf)
+    q = sp.add_parser("norm-inv"); q.add_argument("--p", type=_float, required=True); q.add_argument("--mu", type=_float, default=0.0); q.add_argument("--sigma", type=_float, default=1.0); q.set_defaults(func=cmd_norm_inv)
+
+    # exponential
+    q = sp.add_parser("exp-pdf"); q.add_argument("--x", type=_float, required=True); q.add_argument("--lam", type=_float, required=True); q.set_defaults(func=cmd_exp_pdf)
+    q = sp.add_parser("exp-cdf"); q.add_argument("--x", type=_float, required=True); q.add_argument("--lam", type=_float, required=True); q.set_defaults(func=cmd_exp_cdf)
+
+    # uniform
+    q = sp.add_parser("unif-pdf"); q.add_argument("--x", type=_float, required=True); q.add_argument("--a", type=_float, required=True); q.add_argument("--b", type=_float, required=True); q.set_defaults(func=cmd_unif_pdf)
+    q = sp.add_parser("unif-cdf"); q.add_argument("--x", type=_float, required=True); q.add_argument("--a", type=_float, required=True); q.add_argument("--b", type=_float, required=True); q.set_defaults(func=cmd_unif_cdf)
+
+    # inequalities & CLT
+    q = sp.add_parser("markov"); q.add_argument("--mean", type=_float, required=True); q.add_argument("--t", type=_float, required=True); q.set_defaults(func=cmd_markov)
+    q = sp.add_parser("chebyshev"); q.add_argument("--sigma", type=_float, required=True); q.add_argument("--t", type=_float, required=True); q.set_defaults(func=cmd_chebyshev)
+    q = sp.add_parser("clt"); q.add_argument("--mu", type=_float, required=True); q.add_argument("--sigma", type=_float, required=True); q.add_argument("--n", type=_int, required=True); q.add_argument("--lower", type=_float); q.add_argument("--upper", type=_float); q.set_defaults(func=cmd_clt)
+
+    # plotting
+    q = sp.add_parser("plot-pdf")
+    q.add_argument("--dist", choices=["normal","exponential","uniform"], required=True)
+    q.add_argument("--mu", type=_float, default=0.0); q.add_argument("--sigma", type=_float, default=1.0)
+    q.add_argument("--lam", type=_float, default=1.0); q.add_argument("--a", type=_float, default=0.0); q.add_argument("--b", type=_float, default=1.0)
+    q.add_argument("--out", help="Save figure to this path instead of showing it")
+    q.set_defaults(func=cmd_plot_pdf)
+
+    q = sp.add_parser("sim-hist")
+    q.add_argument("--dist", choices=["normal","binom","poisson"], required=True)
+    q.add_argument("--n", type=_int, default=10000); q.add_argument("--bins", type=_int, default=50); q.add_argument("--seed", type=_int, default=42)
+    q.add_argument("--mu", type=_float, default=0.0); q.add_argument("--sigma", type=_float, default=1.0)
+    q.add_argument("--N", type=_int, default=10); q.add_argument("--p", type=_float, default=0.5)
+    q.add_argument("--lam", type=_float, default=3.0)
+    q.add_argument("--dtype", choices=["float64","float32"], default="float64", help="Reduce RAM by using float32 for Normal sims")
+    q.add_argument("--out", help="Save figure to this path instead of showing it")
+    q.set_defaults(func=cmd_sim_hist)
+
+    a = p.parse_args()
+    a.func(a)
+
+if __name__ == "__main__":
+    main()
